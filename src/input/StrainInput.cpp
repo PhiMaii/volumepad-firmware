@@ -2,10 +2,17 @@
 
 #include <cmath>
 
+#include "util/MathUtil.h"
+
 namespace vp {
 
 bool StrainInput::begin(const DeviceConfig& config) {
   config_ = config;
+
+  pressThreshold_ = config_.hardware.strainPressThreshold;
+  releaseHysteresis_ = config_.hardware.strainReleaseHysteresis;
+  forceScale_ = config_.hardware.strainForceScale;
+  baselineAlpha_ = config_.hardware.strainBaselineAlpha;
 
   if (config_.pins.hx711Dout < 0 || config_.pins.hx711Sck < 0) {
     return false;
@@ -36,20 +43,21 @@ StrainEvent StrainInput::poll(uint32_t nowMs) {
   filtered_ += (rawf - filtered_) * filterAlpha;
 
   if (!pressed_) {
-    baseline_ += (filtered_ - baseline_) * config_.hardware.strainBaselineAlpha;
+    baseline_ += (filtered_ - baseline_) * baselineAlpha_;
   }
 
-  float force = (baseline_ - filtered_) * config_.hardware.strainForceScale;
+  float force = (baseline_ - filtered_) * forceScale_;
   if (!config_.hardware.strainInvertSign) {
     force = -force;
   }
+
+  lastForce_ = force;
   event.force = force;
 
-  const float pressThreshold = config_.hardware.strainPressThreshold;
-  const float releaseThreshold = pressThreshold - config_.hardware.strainReleaseHysteresis;
+  const float releaseThreshold = pressThreshold_ - releaseHysteresis_;
   const uint32_t debounceMs = 30;
 
-  if (!pressed_ && force >= pressThreshold && (nowMs - lastEdgeMs_) >= debounceMs) {
+  if (!pressed_ && force >= pressThreshold_ && (nowMs - lastEdgeMs_) >= debounceMs) {
     pressed_ = true;
     lastEdgeMs_ = nowMs;
     event.changed = true;
@@ -71,6 +79,31 @@ StrainEvent StrainInput::poll(uint32_t nowMs) {
 
 bool StrainInput::ready() const {
   return ready_;
+}
+
+void StrainInput::calibrateBaseline() {
+  baseline_ = filtered_;
+}
+
+void StrainInput::applyDebugTuning(float pressThreshold, float releaseHysteresis, float forceScale, float baselineAlpha) {
+  pressThreshold_ = pressThreshold;
+  releaseHysteresis_ = clampValue(releaseHysteresis, 0.0f, pressThreshold_);
+  forceScale_ = forceScale;
+  baselineAlpha_ = clampValue(baselineAlpha, 0.00001f, 0.2f);
+}
+
+StrainDebugState StrainInput::getDebugState() const {
+  StrainDebugState state;
+  state.ready = ready_;
+  state.pressed = pressed_;
+  state.force = lastForce_;
+  state.baseline = baseline_;
+  state.filtered = filtered_;
+  state.pressThreshold = pressThreshold_;
+  state.releaseHysteresis = releaseHysteresis_;
+  state.forceScale = forceScale_;
+  state.baselineAlpha = baselineAlpha_;
+  return state;
 }
 
 }  // namespace vp

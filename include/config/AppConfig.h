@@ -10,6 +10,10 @@
 #define VP_SENSOR_BACKEND_AS5600 0
 #endif
 
+#ifndef VP_SENSOR_BACKEND_AS6500
+#define VP_SENSOR_BACKEND_AS6500 0
+#endif
+
 #ifndef VP_FIRMWARE_VERSION
 #define VP_FIRMWARE_VERSION "fw-0.1.0"
 #endif

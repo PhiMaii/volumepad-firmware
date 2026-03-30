@@ -14,11 +14,27 @@ struct StrainEvent {
   float force = 0.0f;
 };
 
+struct StrainDebugState {
+  bool ready = false;
+  bool pressed = false;
+  float force = 0.0f;
+  float baseline = 0.0f;
+  float filtered = 0.0f;
+  float pressThreshold = 0.0f;
+  float releaseHysteresis = 0.0f;
+  float forceScale = 1.0f;
+  float baselineAlpha = 0.0025f;
+};
+
 class StrainInput {
  public:
   bool begin(const DeviceConfig& config);
   StrainEvent poll(uint32_t nowMs);
   bool ready() const;
+
+  void calibrateBaseline();
+  void applyDebugTuning(float pressThreshold, float releaseHysteresis, float forceScale, float baselineAlpha);
+  StrainDebugState getDebugState() const;
 
  private:
   DeviceConfig config_{};
@@ -30,7 +46,13 @@ class StrainInput {
 
   float baseline_ = 0.0f;
   float filtered_ = 0.0f;
+  float lastForce_ = 0.0f;
   bool initialized_ = false;
+
+  float pressThreshold_ = 0.0f;
+  float releaseHysteresis_ = 0.0f;
+  float forceScale_ = 1.0f;
+  float baselineAlpha_ = 0.0025f;
 };
 
 }  // namespace vp

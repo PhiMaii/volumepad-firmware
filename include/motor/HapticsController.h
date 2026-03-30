@@ -10,6 +10,19 @@
 
 namespace vp {
 
+struct HapticsDebugState {
+  bool ready = false;
+  int position = 0;
+  float detentStrengthMaxVPerRad = 0.0f;
+  float snapStrengthMaxVPerRad = 0.0f;
+  float clickPulseVoltage = 0.0f;
+  uint32_t clickPulseMs = 0;
+  float endstopMinPos = 0.0f;
+  float endstopMaxPos = 0.0f;
+  float endstopMinStrength = 0.0f;
+  float endstopMaxStrength = 0.0f;
+};
+
 class HapticsController {
  public:
   bool begin(const DeviceConfig& config, Sensor* sensor);
@@ -21,6 +34,16 @@ class HapticsController {
   int consumeDetentDelta();
   int currentPosition() const;
   bool ready() const;
+
+  void applyDebugTuning(float detentStrengthMaxVPerRad,
+                        float snapStrengthMaxVPerRad,
+                        float clickPulseVoltage,
+                        uint32_t clickPulseMs,
+                        float endstopMinPos,
+                        float endstopMaxPos,
+                        float endstopMinStrength,
+                        float endstopMaxStrength);
+  HapticsDebugState getDebugState() const;
 
  private:
   float computeDetentTorque(float angle) const;

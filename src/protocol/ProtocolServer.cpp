@@ -9,9 +9,10 @@ namespace vp {
 ProtocolServer::ProtocolServer(const DeviceConfig& config,
                                DeviceRuntimeSettings& settings,
                                HapticsController& haptics,
+                               StrainInput& strain,
                                LedController& leds,
                                DisplayManager& display)
-    : config_(config), settings_(settings), haptics_(haptics), leds_(leds), display_(display) {}
+    : config_(config), settings_(settings), haptics_(haptics), strain_(strain), leds_(leds), display_(display) {}
 
 void ProtocolServer::begin() {
   sendHello();
@@ -48,6 +49,12 @@ void ProtocolServer::tick() {
     }
 
     rxBuffer_[rxLen_++] = c;
+  }
+
+  const uint32_t nowMs = millis();
+  if (debugStreamEnabled_ && (nowMs - lastDebugStreamMs_) >= debugStreamIntervalMs_) {
+    lastDebugStreamMs_ = nowMs;
+    sendDebugState("stream");
   }
 }
 
@@ -136,6 +143,26 @@ void ProtocolServer::processLine(const String& line) {
     return;
   }
 
+  if (strcmp(type, "debug.state.get") == 0) {
+    handleDebugStateGet(requestId);
+    return;
+  }
+
+  if (strcmp(type, "debug.strain.calibrate") == 0) {
+    handleDebugCalibrateStrain(requestId);
+    return;
+  }
+
+  if (strcmp(type, "debug.tuning.apply") == 0) {
+    handleDebugTuningApply(payload, requestId);
+    return;
+  }
+
+  if (strcmp(type, "debug.stream.set") == 0) {
+    handleDebugStreamSet(payload, requestId);
+    return;
+  }
+
   if (strcmp(type, "display.beginFrame") == 0 ||
       strcmp(type, "display.rect") == 0 ||
       strcmp(type, "display.endFrame") == 0 ||
@@ -194,6 +221,77 @@ void ProtocolServer::handleLedsMeter(JsonVariantConst payload, const char* reque
 
   leds_.applyMeter(meter);
   sendAck(requestId, "leds.meter");
+}
+
+void ProtocolServer::handleDebugStateGet(const char* requestId) {
+  sendDebugState("request");
+  sendAck(requestId, "debug.state.get");
+}
+
+void ProtocolServer::handleDebugCalibrateStrain(const char* requestId) {
+  strain_.calibrateBaseline();
+  sendDebugState("strain-calibrate");
+  sendAck(requestId, "debug.strain.calibrate");
+}
+
+void ProtocolServer::handleDebugTuningApply(JsonVariantConst payload, const char* requestId) {
+  auto strainState = strain_.getDebugState();
+  auto hapticsState = haptics_.getDebugState();
+
+  float pressThreshold = strainState.pressThreshold;
+  float releaseHysteresis = strainState.releaseHysteresis;
+  float forceScale = strainState.forceScale;
+  float baselineAlpha = strainState.baselineAlpha;
+
+  float detentStrengthMax = hapticsState.detentStrengthMaxVPerRad;
+  float snapStrengthMax = hapticsState.snapStrengthMaxVPerRad;
+  float clickPulseVoltage = hapticsState.clickPulseVoltage;
+  uint32_t clickPulseMs = hapticsState.clickPulseMs;
+  float endstopMinPos = hapticsState.endstopMinPos;
+  float endstopMaxPos = hapticsState.endstopMaxPos;
+  float endstopMinStrength = hapticsState.endstopMinStrength;
+  float endstopMaxStrength = hapticsState.endstopMaxStrength;
+
+  if (payload.is<JsonObjectConst>()) {
+    JsonObjectConst obj = payload.as<JsonObjectConst>();
+    pressThreshold = obj["pressThreshold"] | pressThreshold;
+    releaseHysteresis = obj["releaseHysteresis"] | releaseHysteresis;
+    forceScale = obj["forceScale"] | forceScale;
+    baselineAlpha = obj["baselineAlpha"] | baselineAlpha;
+
+    detentStrengthMax = obj["detentStrengthMaxVPerRad"] | detentStrengthMax;
+    snapStrengthMax = obj["snapStrengthMaxVPerRad"] | snapStrengthMax;
+    clickPulseVoltage = obj["clickPulseVoltage"] | clickPulseVoltage;
+    clickPulseMs = obj["clickPulseMs"] | clickPulseMs;
+    endstopMinPos = obj["endstopMinPos"] | endstopMinPos;
+    endstopMaxPos = obj["endstopMaxPos"] | endstopMaxPos;
+    endstopMinStrength = obj["endstopMinStrength"] | endstopMinStrength;
+    endstopMaxStrength = obj["endstopMaxStrength"] | endstopMaxStrength;
+  }
+
+  strain_.applyDebugTuning(pressThreshold, releaseHysteresis, forceScale, baselineAlpha);
+  haptics_.applyDebugTuning(
+      detentStrengthMax,
+      snapStrengthMax,
+      clickPulseVoltage,
+      clickPulseMs,
+      endstopMinPos,
+      endstopMaxPos,
+      endstopMinStrength,
+      endstopMaxStrength);
+
+  sendDebugState("tuning-apply");
+  sendAck(requestId, "debug.tuning.apply");
+}
+
+void ProtocolServer::handleDebugStreamSet(JsonVariantConst payload, const char* requestId) {
+  if (payload.is<JsonObjectConst>()) {
+    JsonObjectConst obj = payload.as<JsonObjectConst>();
+    debugStreamEnabled_ = obj["enabled"] | debugStreamEnabled_;
+    debugStreamIntervalMs_ = clampValue(static_cast<uint32_t>(obj["intervalMs"] | debugStreamIntervalMs_), 50U, 2000U);
+  }
+
+  sendAck(requestId, "debug.stream.set");
 }
 
 void ProtocolServer::sendHello() {
@@ -272,6 +370,47 @@ void ProtocolServer::sendNack(const char* requestId, const char* forType, const 
   payload["ok"] = false;
   payload["type"] = forType;
   payload["reason"] = reason;
+
+  serializeJson(doc, Serial);
+  Serial.print('\n');
+}
+
+void ProtocolServer::sendDebugState(const char* source) {
+  const StrainDebugState strain = strain_.getDebugState();
+  const HapticsDebugState haptics = haptics_.getDebugState();
+
+  StaticJsonDocument<768> doc;
+  doc["type"] = "debug.state";
+  JsonObject payload = doc.createNestedObject("payload");
+  payload["deviceId"] = config_.identity.deviceId;
+  payload["source"] = source;
+  payload["uptimeMs"] = millis();
+  payload["detentCount"] = settings_.detentCount;
+  payload["detentStrength"] = settings_.detentStrength;
+  payload["snapStrength"] = settings_.snapStrength;
+
+  JsonObject strainObj = payload.createNestedObject("strain");
+  strainObj["ready"] = strain.ready;
+  strainObj["pressed"] = strain.pressed;
+  strainObj["force"] = strain.force;
+  strainObj["baseline"] = strain.baseline;
+  strainObj["filtered"] = strain.filtered;
+  strainObj["pressThreshold"] = strain.pressThreshold;
+  strainObj["releaseHysteresis"] = strain.releaseHysteresis;
+  strainObj["forceScale"] = strain.forceScale;
+  strainObj["baselineAlpha"] = strain.baselineAlpha;
+
+  JsonObject hapticsObj = payload.createNestedObject("haptics");
+  hapticsObj["ready"] = haptics.ready;
+  hapticsObj["position"] = haptics.position;
+  hapticsObj["detentStrengthMaxVPerRad"] = haptics.detentStrengthMaxVPerRad;
+  hapticsObj["snapStrengthMaxVPerRad"] = haptics.snapStrengthMaxVPerRad;
+  hapticsObj["clickPulseVoltage"] = haptics.clickPulseVoltage;
+  hapticsObj["clickPulseMs"] = haptics.clickPulseMs;
+  hapticsObj["endstopMinPos"] = haptics.endstopMinPos;
+  hapticsObj["endstopMaxPos"] = haptics.endstopMaxPos;
+  hapticsObj["endstopMinStrength"] = haptics.endstopMinStrength;
+  hapticsObj["endstopMaxStrength"] = haptics.endstopMaxStrength;
 
   serializeJson(doc, Serial);
   Serial.print('\n');

@@ -7,6 +7,8 @@
 namespace vp {
 
 bool HapticsController::begin(const DeviceConfig& config, Sensor* sensor) {
+  ready_ = false;
+
   if (sensor == nullptr) {
     return false;
   }
@@ -28,7 +30,10 @@ bool HapticsController::begin(const DeviceConfig& config, Sensor* sensor) {
   driver_->voltage_power_supply = config_.hardware.motorSupplyVoltage;
   driver_->voltage_limit = config_.hardware.motorVoltageLimit;
   driver_->pwm_frequency = config_.hardware.motorPwmFrequency;
-  driver_->init();
+  const int driverInitStatus = driver_->init();
+  if (driverInitStatus == 0 || !driver_->initialized) {
+    return false;
+  }
 
   motor_->linkDriver(driver_.get());
   motor_->linkSensor(sensor);
@@ -38,9 +43,23 @@ bool HapticsController::begin(const DeviceConfig& config, Sensor* sensor) {
   motor_->voltage_limit = config_.hardware.motorVoltageLimit;
 
   motor_->init();
-  motor_->initFOC();
+  if (motor_->motor_status == FOCMotorStatus::motor_init_failed) {
+    motor_->disable();
+    return false;
+  }
+
+  const int focInitStatus = motor_->initFOC();
+  if (focInitStatus == 0 || motor_->motor_status != FOCMotorStatus::motor_ready) {
+    motor_->disable();
+    return false;
+  }
 
   const float angle = motor_->shaft_angle;
+  if (!std::isfinite(angle)) {
+    motor_->disable();
+    return false;
+  }
+
   const float step = kTwoPi / static_cast<float>(settings_.detentCount);
   detentOffset_ = angle;
   lastDetentIndex_ = static_cast<int>(roundf((angle - detentOffset_) / step));
@@ -104,6 +123,43 @@ int HapticsController::currentPosition() const {
 
 bool HapticsController::ready() const {
   return ready_;
+}
+
+void HapticsController::applyDebugTuning(float detentStrengthMaxVPerRad,
+                                         float snapStrengthMaxVPerRad,
+                                         float clickPulseVoltage,
+                                         uint32_t clickPulseMs,
+                                         float endstopMinPos,
+                                         float endstopMaxPos,
+                                         float endstopMinStrength,
+                                         float endstopMaxStrength) {
+  config_.hardware.detentStrengthMaxVPerRad = clampValue(detentStrengthMaxVPerRad, 0.0f, 12.0f);
+  config_.hardware.snapStrengthMaxVPerRad = clampValue(snapStrengthMaxVPerRad, 0.0f, 12.0f);
+  config_.hardware.clickPulseVoltage = clampValue(clickPulseVoltage, 0.0f, config_.hardware.endstopMaxVoltage);
+  config_.hardware.clickPulseMs = clampValue(clickPulseMs, 1U, 1000U);
+
+  if (endstopMinPos < endstopMaxPos) {
+    config_.hardware.endstopMinPos = endstopMinPos;
+    config_.hardware.endstopMaxPos = endstopMaxPos;
+  }
+
+  config_.hardware.endstopMinStrength = clampValue(endstopMinStrength, 0.0f, 20.0f);
+  config_.hardware.endstopMaxStrength = clampValue(endstopMaxStrength, 0.0f, 20.0f);
+}
+
+HapticsDebugState HapticsController::getDebugState() const {
+  HapticsDebugState state;
+  state.ready = ready_;
+  state.position = currentDetentIndex_;
+  state.detentStrengthMaxVPerRad = config_.hardware.detentStrengthMaxVPerRad;
+  state.snapStrengthMaxVPerRad = config_.hardware.snapStrengthMaxVPerRad;
+  state.clickPulseVoltage = config_.hardware.clickPulseVoltage;
+  state.clickPulseMs = config_.hardware.clickPulseMs;
+  state.endstopMinPos = config_.hardware.endstopMinPos;
+  state.endstopMaxPos = config_.hardware.endstopMaxPos;
+  state.endstopMinStrength = config_.hardware.endstopMinStrength;
+  state.endstopMaxStrength = config_.hardware.endstopMaxStrength;
+  return state;
 }
 
 float HapticsController::computeDetentTorque(float angle) const {

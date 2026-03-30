@@ -14,8 +14,37 @@ AngleSensorManager::AngleSensorManager()
 bool AngleSensorManager::begin(const DeviceConfig& config) {
   config_ = config;
   instance_ = this;
+  ready_ = false;
   initBus();
+
+  uint16_t raw = 0;
+  uint16_t maxRaw = 0;
+  bool sampleOk = false;
+
+  // Validate sensor communication before enabling FOC.
+  for (int i = 0; i < 16; ++i) {
+    if (sampleRawAngle(raw, maxRaw)) {
+      sampleOk = true;
+      break;
+    }
+    delay(2);
+  }
+
+  if (!sampleOk || maxRaw == 0U) {
+    return false;
+  }
+
+  cachedAngle_ = (static_cast<float>(raw) / static_cast<float>(maxRaw)) * kTwoPi;
   sensor_.init();
+
+  for (int i = 0; i < 4; ++i) {
+    const float angle = readAngleRad();
+    if (!std::isfinite(angle)) {
+      return false;
+    }
+    delay(1);
+  }
+
   ready_ = true;
   return true;
 }
@@ -59,16 +88,8 @@ void AngleSensorManager::initBus() {
 
 float AngleSensorManager::readAngleRad() {
   uint16_t raw = 0;
-  bool ok = false;
   uint16_t maxRaw = 0;
-
-  if (config_.sensorBackend == AngleSensorBackend::As5600I2c) {
-    ok = readAs5600Raw(raw);
-    maxRaw = static_cast<uint16_t>((1U << config_.hardware.as5600Bits) - 1U);
-  } else {
-    ok = readMt6701Raw(raw);
-    maxRaw = static_cast<uint16_t>((1U << config_.hardware.mt6701Bits) - 1U);
-  }
+  const bool ok = sampleRawAngle(raw, maxRaw);
 
   if (!ok || maxRaw == 0) {
     return cachedAngle_;
@@ -76,6 +97,24 @@ float AngleSensorManager::readAngleRad() {
 
   cachedAngle_ = (static_cast<float>(raw) / static_cast<float>(maxRaw)) * kTwoPi;
   return cachedAngle_;
+}
+
+bool AngleSensorManager::sampleRawAngle(uint16_t& raw, uint16_t& maxRaw) const {
+  if (config_.sensorBackend == AngleSensorBackend::As5600I2c) {
+    if (config_.hardware.as5600Bits == 0 || config_.hardware.as5600Bits > 15) {
+      return false;
+    }
+
+    maxRaw = static_cast<uint16_t>((1U << config_.hardware.as5600Bits) - 1U);
+    return maxRaw != 0U && readAs5600Raw(raw);
+  }
+
+  if (config_.hardware.mt6701Bits == 0 || config_.hardware.mt6701Bits > 15) {
+    return false;
+  }
+
+  maxRaw = static_cast<uint16_t>((1U << config_.hardware.mt6701Bits) - 1U);
+  return maxRaw != 0U && readMt6701Raw(raw);
 }
 
 bool AngleSensorManager::readAs5600Raw(uint16_t& raw) const {

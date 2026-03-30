@@ -26,6 +26,7 @@ class AngleSensorManager {
 
   void initBus();
   float readAngleRad();
+  bool sampleRawAngle(uint16_t& raw, uint16_t& maxRaw) const;
   bool readAs5600Raw(uint16_t& raw) const;
   bool readMt6701Raw(uint16_t& raw) const;
 

@@ -33,8 +33,11 @@ void setup() {
 
   vp::gSettings.clamp();
 
-  vp::gSensorManager.begin(vp::gConfig);
-  const bool hapticsReady = vp::gHaptics.begin(vp::gConfig, vp::gSensorManager.sensor());
+  const bool sensorReady = vp::gSensorManager.begin(vp::gConfig);
+  bool hapticsReady = false;
+  if (sensorReady) {
+    hapticsReady = vp::gHaptics.begin(vp::gConfig, vp::gSensorManager.sensor());
+  }
 
   vp::gKeyInput.begin(vp::gConfig);
   const bool strainReady = vp::gStrainInput.begin(vp::gConfig);
@@ -42,12 +45,20 @@ void setup() {
   vp::gLedController.begin(vp::gConfig, vp::gSettings);
   vp::gDisplayManager.begin(vp::gConfig, vp::gSettings);
 
-  static vp::ProtocolServer protocol(vp::gConfig, vp::gSettings, vp::gHaptics, vp::gLedController, vp::gDisplayManager);
+  static vp::ProtocolServer protocol(vp::gConfig, vp::gSettings, vp::gHaptics, vp::gStrainInput, vp::gLedController, vp::gDisplayManager);
   vp::gProtocol = &protocol;
   vp::gProtocol->begin();
 
+  if (!sensorReady) {
+    if (vp::gConfig.sensorBackend == vp::AngleSensorBackend::As5600I2c) {
+      vp::gProtocol->sendDiag("error", "Angle sensor init failed (AS5600 I2C). Check wiring, power, and build env.");
+    } else {
+      vp::gProtocol->sendDiag("error", "Angle sensor init failed (MT6701 SPI). Check wiring, power, and build env.");
+    }
+  }
+
   if (!hapticsReady) {
-    vp::gProtocol->sendDiag("error", "Haptics init failed");
+    vp::gProtocol->sendDiag("error", "Haptics init failed; motor torque control is disabled");
   }
 
   if (!strainReady) {

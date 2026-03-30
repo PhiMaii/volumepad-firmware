@@ -3,7 +3,7 @@
 namespace vp {
 
 static AngleSensorBackend resolveBackend() {
-#if VP_SENSOR_BACKEND_AS5600
+#if VP_SENSOR_BACKEND_AS5600 || VP_SENSOR_BACKEND_AS6500
   return AngleSensorBackend::As5600I2c;
 #else
   return AngleSensorBackend::Mt6701Spi;
